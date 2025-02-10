@@ -39,7 +39,7 @@ async function handleWorkflowConvertQueue({ detail }) {
     console.log("Workflow conversion completed:", result);
   } catch (error) {
     console.error("Error in workflow conversion:", error);
-    // 尝试通知服务器任务失败
+    // try to report error to server
     try {
       await api.fetchApi("/cpe/workflow/convert/callback", {
         method: "POST",
