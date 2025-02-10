@@ -4,8 +4,19 @@ This is a ComfyUI extension that provides additional API endpoints functionality
 
 ## Installation
 
-1. Place this folder in the `custom_nodes` directory of ComfyUI
-2. Restart the ComfyUI server
+1. Navigate to ComfyUI's custom_nodes directory:
+
+```bash
+cd custom_nodes
+```
+
+2. Clone this repository:
+
+```bash
+git clone https://github.com/ShunL12324/comfy-portal-endpoint
+```
+
+3. Restart the ComfyUI server
 
 ## API Endpoints
 
