@@ -31,13 +31,6 @@ curl -X POST "http://localhost:8188/api/cpe/workflow/convert" \
 
 Note: This endpoint helps transform the UI-based workflow format into a format that can be used with ComfyUI's API system. It handles the conversion of node connections, parameters, and workflow structure to make it suitable for API execution.
 
-### Internal Callback Endpoint
-
-- Endpoint: `/api/cpe/workflow/convert/callback`
-- Method: POST
-- Description: Internal endpoint for handling workflow conversion callbacks
-- Note: This endpoint is for internal use only
-
 ## Development Notes
 
 - This extension focuses on providing API endpoints, no custom nodes included
