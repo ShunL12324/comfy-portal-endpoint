@@ -17,28 +17,16 @@ This is a ComfyUI extension that provides additional API endpoints functionality
 - Headers Required:
   - `Client-Id`: A unique identifier for the client
 - Request Body: ComfyUI workflow JSON data (the format you get when you save a workflow in the UI)
-- Response Example:
 
-```json
-{
-  "status": "success",
-  "message": "Workflow converted successfully",
-  "data": {
-    "workflow": {
-      // API-compatible workflow format
-      // This format can be used directly with ComfyUI's API endpoints
-    }
-  }
-}
-```
+#### Example Call
 
-- Error Response Example:
-
-```json
-{
-  "status": "error",
-  "message": "Error message describing what went wrong"
-}
+```bash
+curl -X POST "http://localhost:8188/cpe/workflow/convert" \
+  -H "Content-Type: application/json" \
+  -H "Client-Id: your-client-id" \
+  -d '{
+    "workflow": "<workflow_json_string>"
+  }'
 ```
 
 Note: This endpoint helps transform the UI-based workflow format into a format that can be used with ComfyUI's API system. It handles the conversion of node connections, parameters, and workflow structure to make it suitable for API execution.
