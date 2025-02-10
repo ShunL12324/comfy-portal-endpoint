@@ -1,6 +1,6 @@
 # ComfyUI Portal Endpoint Extension
 
-This is a ComfyUI extension that provides additional API endpoints functionality.
+This is a ComfyUI extension that provides additional API endpoints functionality, primarily designed to support [Comfy Portal](https://github.com/ShunL12324/comfy-portal) - a modern iOS client application for ComfyUI. These endpoints enable seamless integration between the mobile app and ComfyUI server, providing features like workflow conversion, listing, and saving capabilities.
 
 ## Installation
 
