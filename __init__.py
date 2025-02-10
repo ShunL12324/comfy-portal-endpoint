@@ -3,7 +3,6 @@ from .logger import get_logger
 from .api import workflow
 
 logger = get_logger()
-logger.info("Loading ComfyUI Portal Endpoint Extension...")
 
 # set web directory
 WEB_DIRECTORY = "js"
@@ -12,4 +11,4 @@ WEB_DIRECTORY = "js"
 NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}
 
-__all__ = ['NODE_CLASS_MAPPINGS']
+__all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS']
