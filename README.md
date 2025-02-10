@@ -11,7 +11,7 @@ This is a ComfyUI extension that provides additional API endpoints functionality
 
 ### Workflow Conversion
 
-- Endpoint: `/cpe/workflow/convert`
+- Endpoint: `/api/cpe/workflow/convert`
 - Method: POST
 - Description: Converts a ComfyUI workflow JSON format to API-compatible JSON format for programmatic API calls
 - Headers Required:
@@ -21,7 +21,7 @@ This is a ComfyUI extension that provides additional API endpoints functionality
 #### Example Call
 
 ```bash
-curl -X POST "http://localhost:8188/cpe/workflow/convert" \
+curl -X POST "http://localhost:8188/api/cpe/workflow/convert" \
   -H "Content-Type: application/json" \
   -H "Client-Id: your-client-id" \
   -d '{
@@ -33,7 +33,7 @@ Note: This endpoint helps transform the UI-based workflow format into a format t
 
 ### Internal Callback Endpoint
 
-- Endpoint: `/cpe/workflow/convert/callback`
+- Endpoint: `/api/cpe/workflow/convert/callback`
 - Method: POST
 - Description: Internal endpoint for handling workflow conversion callbacks
 - Note: This endpoint is for internal use only
@@ -41,7 +41,7 @@ Note: This endpoint helps transform the UI-based workflow format into a format t
 ## Development Notes
 
 - This extension focuses on providing API endpoints, no custom nodes included
-- All API endpoints are prefixed with `/cpe/`
+- All API endpoints are prefixed with `/api/cpe/`
 - Uses aiohttp framework for handling API requests
 - Implements a task queue system for workflow processing
 - Includes error handling and timeout mechanisms
