@@ -27,7 +27,6 @@ async function handleWorkflowConvertQueue({ detail }) {
       },
       body: JSON.stringify({
         workflow: workflowApiFormat,
-        client_id: detail.client_id,
         task_id: detail.task_id,
       }),
     });
@@ -48,7 +47,6 @@ async function handleWorkflowConvertQueue({ detail }) {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          client_id: detail.client_id,
           task_id: detail.task_id,
           error: error.message,
           status: "failed",

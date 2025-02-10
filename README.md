@@ -25,8 +25,6 @@ git clone https://github.com/ShunL12324/comfy-portal-endpoint
 - Endpoint: `/api/cpe/workflow/convert`
 - Method: POST
 - Description: Converts a ComfyUI workflow JSON format to API-compatible JSON format for programmatic API calls
-- Headers Required:
-  - `Client-Id`: A unique identifier for the client
 - Request Body: ComfyUI workflow JSON data (the format you get when you save a workflow in the UI)
 
 #### Example Call
@@ -34,13 +32,44 @@ git clone https://github.com/ShunL12324/comfy-portal-endpoint
 ```bash
 curl -X POST "http://localhost:8188/api/cpe/workflow/convert" \
   -H "Content-Type: application/json" \
-  -H "Client-Id: your-client-id" \
   -d '{
     "workflow": "<workflow_json_string>"
   }'
 ```
 
-Note: This endpoint helps transform the UI-based workflow format into a format that can be used with ComfyUI's API system. It handles the conversion of node connections, parameters, and workflow structure to make it suitable for API execution.
+### List Workflows
+
+- Endpoint: `/api/cpe/workflow/list`
+- Method: GET
+- Description: Lists all available workflows in the user's workflows directory
+- Response: List of workflow files with their metadata (filename, size, modified time)
+
+#### Example Call
+
+```bash
+curl "http://localhost:8188/api/cpe/workflow/list"
+```
+
+### Save Workflow
+
+- Endpoint: `/api/cpe/workflow/save`
+- Method: POST
+- Description: Saves a workflow JSON to the workflows directory
+- Request Body:
+  - `workflow`: Workflow JSON string (required)
+  - `name`: Filename to save as (optional, will generate timestamp-based name if not provided)
+  - Note: `.json` extension will be automatically added if not present in the name
+
+#### Example Call
+
+```bash
+curl -X POST "http://localhost:8188/api/cpe/workflow/save" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "workflow": "<workflow_json_string>",
+    "name": "my_workflow"
+  }'
+```
 
 ## Development Notes
 

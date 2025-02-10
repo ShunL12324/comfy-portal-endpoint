@@ -7,12 +7,15 @@ import time
 from queue import Queue
 import asyncio
 from ..logger import get_logger
+import aiohttp
+import os
+import glob
+import json
 
 # Configure logging
 logger = get_logger()
 # Get the PromptServer instance
 server = PromptServer.instance
-
 
 # task queue
 task_queue = Queue()
@@ -20,7 +23,6 @@ task_queue = Queue()
 @dataclass
 class Task:
     id: str
-    client_id: str
     status: Literal["pending", "processing", "completed", "failed"]  # Better type hint
     data: dict
     result: Optional[dict] = None
@@ -42,15 +44,16 @@ tasks: Dict[str, Task] = {}
 TIMEOUT_SECONDS = 10
 POLLING_INTERVALS = [0.5, 1.0, 1.5]  # in seconds
 
+def get_server_address():
+    """Get the actual server address that ComfyUI is listening on"""
+    # Get server host and port from the server instance
+    # Use the same host as the request to ensure it works with 0.0.0.0
+    return "" # Return empty string to use relative URL
+
 @server.routes.post("/cpe/workflow/convert")
 async def convert_json(request):
     """put task into queue, generate a task id, put task into queue"""
     try:
-        # Get client ID from headers
-        client_id = request.headers.get('Client-Id')
-        if not client_id:
-            raise ValueError("Client-Id header is required")
-
         data = await request.json()
         if not data:
             raise ValueError("Request body is required")
@@ -59,7 +62,6 @@ async def convert_json(request):
         task_id = str(uuid.uuid4())
         task = Task(
             id=task_id,
-            client_id=client_id,
             status="pending",
             data=data
         )
@@ -69,7 +71,6 @@ async def convert_json(request):
         task_queue.put(task)
         server.send_sync("workflow_convert_queue", {
             "data": data,
-            "client_id": client_id,
             "task_id": task_id
         })
 
@@ -130,13 +131,7 @@ async def convert_callback(request):
         if not task_id or task_id not in tasks:
             raise ValueError("Invalid task_id")
 
-        client_id = data.get("client_id")
-        if not client_id:
-            raise ValueError("Client ID is required")
-
         task = tasks[task_id]
-        if task.client_id != client_id:
-            raise ValueError("Client ID mismatch")
 
         # Check if there's an error in the response
         if "error" in data:
@@ -151,7 +146,6 @@ async def convert_callback(request):
             next_task.update_status("processing")
             server.send_sync("workflow_convert_queue", {
                 "data": next_task.data,
-                "client_id": next_task.client_id,
                 "task_id": next_task.id
             })
         except:
@@ -173,5 +167,98 @@ async def convert_callback(request):
         return web.json_response({
             "status": "error",
             "message": "Internal server error"
+        }, status=500)
+
+@server.routes.get("/cpe/workflow/list")
+async def list_workflows(request):
+    """List all available workflows from the userdata/workflows directory"""
+    try:
+        # Get user directory path - go up one more level to reach ComfyUI root
+        user_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "user")
+        workflow_dir = os.path.join(user_dir, "default", "workflows")
+        
+        # Create directory if not exists
+        os.makedirs(workflow_dir, exist_ok=True)
+        
+        # Get all json files recursively
+        pattern = os.path.join(glob.escape(workflow_dir), '**', '*.json')
+        workflow_files = []
+        
+        for file_path in glob.glob(pattern, recursive=True):
+            workflow_files.append({
+                "filename": os.path.relpath(file_path, workflow_dir).replace(os.sep, '/'),
+                "size": os.path.getsize(file_path),
+                "modified": os.path.getmtime(file_path)
+            })
+        
+        return web.json_response({
+            "status": "success",
+            "workflows": workflow_files
+        })
+
+    except ValueError as e:
+        logger.error("Validation error: %s", str(e))
+        return web.json_response({
+            "status": "error",
+            "message": str(e)
+        }, status=400)
+    except Exception as e:
+        logger.error("Error listing workflows: %s", str(e))
+        return web.json_response({
+            "status": "error",
+            "message": "Internal server error",
+            "details": str(e)
+        }, status=500)
+
+@server.routes.post("/cpe/workflow/save")
+async def save_workflow(request):
+    """Save workflow to the userdata/workflows directory"""
+    try:
+        data = await request.json()
+        if not data or "workflow" not in data:
+            raise ValueError("workflow field is required")
+
+        workflow_str = data["workflow"]
+        # Validate JSON
+        try:
+            json.loads(workflow_str)
+        except json.JSONDecodeError:
+            raise ValueError("Invalid JSON in workflow field")
+
+        # Get workflow name from request or generate one
+        workflow_name = data.get("name", f"workflow_{int(time.time())}.json")
+        if not workflow_name.endswith('.json'):
+            workflow_name += '.json'
+
+        # Get user directory path
+        user_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "user")
+        workflow_dir = os.path.join(user_dir, "default", "workflows")
+        
+        # Create directory if not exists
+        os.makedirs(workflow_dir, exist_ok=True)
+        
+        # Save workflow file
+        file_path = os.path.join(workflow_dir, workflow_name)
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(workflow_str)
+        
+        return web.json_response({
+            "status": "success",
+            "message": "Workflow saved successfully",
+            "filename": workflow_name
+        })
+
+    except ValueError as e:
+        logger.error("Validation error: %s", str(e))
+        return web.json_response({
+            "status": "error",
+            "message": str(e)
+        }, status=400)
+    except Exception as e:
+        logger.error("Error saving workflow: %s", str(e))
+        return web.json_response({
+            "status": "error",
+            "message": "Internal server error",
+            "details": str(e)
         }, status=500)
 
