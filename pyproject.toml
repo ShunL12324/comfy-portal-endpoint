@@ -9,6 +9,6 @@ Repository = "https://github.com/ShunL12324/comfy-portal-endpoint"
 #  Used by Comfy Registry https://comfyregistry.org
 
 [tool.comfy]
-PublisherId = ""
+PublisherId = "shunl"
 DisplayName = "comfy-portal-endpoint"
 Icon = ""
