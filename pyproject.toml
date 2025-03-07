@@ -1,0 +1,14 @@
+[project]
+name = "portal-endpoint"
+description = "This is a ComfyUI extension that provides additional API endpoints functionality, primarily designed to support Comfy Portal - a modern iOS client application for ComfyUI."
+version = "1.0.0"
+license = {file = "LICENSE"}
+
+[project.urls]
+Repository = "https://github.com/ShunL12324/comfy-portal-endpoint"
+#  Used by Comfy Registry https://comfyregistry.org
+
+[tool.comfy]
+PublisherId = ""
+DisplayName = "comfy-portal-endpoint"
+Icon = ""
