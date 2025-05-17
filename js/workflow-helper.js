@@ -7,6 +7,7 @@ app.registerExtension({
 });
 
 async function handleWorkflowConvertQueue({ detail }) {
+  console.log("Received data in handleWorkflowConvertQueue:", detail);
   try {
     const workflowRawData = detail.data.workflow;
     if (!workflowRawData) {
@@ -14,7 +15,7 @@ async function handleWorkflowConvertQueue({ detail }) {
     }
 
     const graph = new window.LGraph();
-    const workflowData = JSON.parse(workflowRawData);
+    const workflowData = workflowRawData;
     graph.configure(workflowData, false);
     const parsedWorkflow = await graphToPrompt(graph, true);
 

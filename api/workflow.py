@@ -70,7 +70,7 @@ async def convert_json(request):
         # Put task into queue and notify internal server
         task_queue.put(task)
         server.send_sync("workflow_convert_queue", {
-            "data": data,
+            "data": {"workflow": data},
             "task_id": task_id
         })
 
@@ -145,7 +145,7 @@ async def convert_callback(request):
             next_task = task_queue.get_nowait()
             next_task.update_status("processing")
             server.send_sync("workflow_convert_queue", {
-                "data": next_task.data,
+                "data": {"workflow": next_task.data},
                 "task_id": next_task.id
             })
         except:
@@ -256,6 +256,155 @@ async def save_workflow(request):
         }, status=400)
     except Exception as e:
         logger.error("Error saving workflow: %s", str(e))
+        return web.json_response({
+            "status": "error",
+            "message": "Internal server error",
+            "details": str(e)
+        }, status=500)
+
+@server.routes.get("/cpe/workflow/get")
+async def get_workflow(request):
+    """Get a specific workflow by filename from the userdata/workflows directory"""
+    try:
+        # Get filename from query parameters
+        filename = request.query.get("filename")
+        if not filename:
+            raise ValueError("filename query parameter is required")
+            
+        # Get user directory path
+        user_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "user")
+        workflow_dir = os.path.join(user_dir, "default", "workflows")
+        
+        # Ensure the path is secure and within the workflows directory
+        file_path = os.path.join(workflow_dir, filename.replace('/', os.sep))
+        if not os.path.normpath(file_path).startswith(os.path.normpath(workflow_dir)):
+            raise ValueError("Invalid filename path")
+        
+        # Check if file exists
+        if not os.path.isfile(file_path):
+            return web.json_response({
+                "status": "error",
+                "message": f"Workflow file not found: {filename}"
+            }, status=404)
+        
+        # Read workflow file
+        with open(file_path, 'r', encoding='utf-8') as f:
+            workflow_content = f.read()
+        
+        return web.json_response({
+            "status": "success",
+            "filename": filename,
+            "workflow": workflow_content
+        })
+
+    except ValueError as e:
+        logger.error("Validation error: %s", str(e))
+        return web.json_response({
+            "status": "error",
+            "message": str(e)
+        }, status=400)
+    except Exception as e:
+        logger.error("Error getting workflow: %s", str(e))
+        return web.json_response({
+            "status": "error",
+            "message": "Internal server error",
+            "details": str(e)
+        }, status=500)
+
+@server.routes.get("/cpe/workflow/get-and-convert")
+async def get_and_convert_workflow(request):
+    """Get a workflow by filename and convert it using the conversion logic"""
+    try:
+        # Get filename from query parameters
+        filename = request.query.get("filename")
+        if not filename:
+            raise ValueError("filename query parameter is required")
+            
+        # Get user directory path
+        user_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "user")
+        workflow_dir = os.path.join(user_dir, "default", "workflows")
+        
+        # Ensure the path is secure and within the workflows directory
+        file_path = os.path.join(workflow_dir, filename.replace('/', os.sep))
+        if not os.path.normpath(file_path).startswith(os.path.normpath(workflow_dir)):
+            raise ValueError("Invalid filename path")
+        
+        # Check if file exists
+        if not os.path.isfile(file_path):
+            return web.json_response({
+                "status": "error",
+                "message": f"Workflow file not found: {filename}"
+            }, status=404)
+        
+        # Read workflow file
+        with open(file_path, 'r', encoding='utf-8') as f:
+            workflow_content = f.read()
+        
+        # Parse workflow JSON
+        try:
+            workflow_data = json.loads(workflow_content)
+        except json.JSONDecodeError:
+            raise ValueError("Invalid JSON in workflow file")
+        
+        if not workflow_data:  # Check if the parsed workflow data is empty
+            raise ValueError("Workflow file contains no data or is an empty JSON object")
+        
+        # Create a task for conversion
+        task_id = str(uuid.uuid4())
+        task = Task(
+            id=task_id,
+            status="pending",
+            data=workflow_data
+        )
+        tasks[task_id] = task
+
+        # Put task into queue and notify internal server
+        task_queue.put(task)
+        server.send_sync("workflow_convert_queue", {
+            "data": {"workflow": workflow_data},
+            "task_id": task_id
+        })
+
+        # Poll for task completion
+        start_time = time.time()
+        current_interval = 0
+
+        while True:
+            # Check if task is completed or failed
+            if tasks[task_id].status in ["completed", "failed"]:
+                if tasks[task_id].status == "completed":
+                    return web.json_response({
+                        "status": "success",
+                        "message": "Workflow converted successfully",
+                        "filename": filename,
+                        "data": tasks[task_id].result
+                    })
+                else:
+                    return web.json_response({
+                        "status": "error",
+                        "message": tasks[task_id].error or "Conversion failed",
+                    }, status=400)
+
+            # Check for timeout
+            if time.time() - start_time > TIMEOUT_SECONDS:
+                tasks[task_id].update_status("failed", error="Task processing timeout")
+                return web.json_response({
+                    "status": "error",
+                    "message": "Workflow conversion timeout"
+                }, status=408)  # 408 Request Timeout
+
+            # Wait for the current interval
+            await asyncio.sleep(POLLING_INTERVALS[min(current_interval, len(POLLING_INTERVALS) - 1)])
+            current_interval += 1
+
+    except ValueError as e:
+        logger.error("Validation error: %s", str(e))
+        return web.json_response({
+            "status": "error",
+            "message": str(e)
+        }, status=400)
+    except Exception as e:
+        logger.error("Error processing workflow: %s", str(e))
         return web.json_response({
             "status": "error",
             "message": "Internal server error",
