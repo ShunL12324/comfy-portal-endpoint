@@ -17,7 +17,9 @@ async function handleWorkflowConvertQueue({ detail }) {
     const graph = new window.LGraph();
     const workflowData = workflowRawData;
     graph.configure(workflowData, false);
-    const parsedWorkflow = await graphToPrompt(graph, true);
+    // Updated to use new signature: graphToPrompt(graph, options)
+    // The function now always cleans inputs (old 'clean' parameter removed)
+    const parsedWorkflow = await graphToPrompt(graph);
 
     const workflowApiFormat = parsedWorkflow.output;
     console.log(workflowApiFormat);
