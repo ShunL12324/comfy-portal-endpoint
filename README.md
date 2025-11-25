@@ -18,20 +18,10 @@ These improvements ensure maximum compatibility with modern ComfyUI workflows wh
 
 ## ⚠️ Important Requirements
 
-**Browser Connection Required for Workflow Conversion:**
+**Workflow conversion requires an active browser connection to ComfyUI.** The conversion runs in frontend JavaScript using LiteGraph, communicating with the backend via WebSocket.
 
-The workflow conversion feature requires an **active browser connection** to ComfyUI's web interface. This is because the conversion logic runs in the frontend JavaScript and communicates with the backend via WebSocket.
-
-✅ **Perfect for:**
-- Comfy Portal iOS app (WebView always connected)
-- Desktop usage with browser open
-- Web-based workflows
-
-❌ **Not suitable for:**
-- Completely headless server deployments
-- Pure API mode without any browser connection
-
-**Why?** The conversion uses ComfyUI's frontend LiteGraph implementation to accurately process workflows. This ensures 100% compatibility with all workflow features (group nodes, reroutes, widgets, etc.).
+✅ Works with: iOS app WebView, browser-based usage
+❌ Not for: Headless/API-only deployments
 
 ## Installation
 
