@@ -43,6 +43,21 @@ tasks: Dict[str, Task] = {}
 # Constants
 TIMEOUT_SECONDS = 10
 POLLING_INTERVALS = [0.5, 1.0, 1.5]  # in seconds
+TASK_MAX_AGE_SECONDS = 60  # Clean up tasks older than this
+TASK_CLEANUP_THRESHOLD = 50  # Trigger cleanup when task count exceeds this
+
+
+def cleanup_stale_tasks():
+    """Remove completed/failed/timed-out tasks older than TASK_MAX_AGE_SECONDS."""
+    now = time.time()
+    stale_ids = [
+        tid for tid, t in tasks.items()
+        if t.status in ("completed", "failed") and (now - t.created_at) > TASK_MAX_AGE_SECONDS
+    ]
+    for tid in stale_ids:
+        del tasks[tid]
+    if stale_ids:
+        logger.info("Cleaned up %d stale task(s)", len(stale_ids))
 
 def get_server_address():
     """Get the actual server address that ComfyUI is listening on"""
@@ -63,9 +78,14 @@ async def convert_json(request):
         task = Task(
             id=task_id,
             status="pending",
-            data=data
+            data=data,
+            created_at=time.time()
         )
         tasks[task_id] = task
+
+        # Periodically clean up stale tasks to prevent memory leaks
+        if len(tasks) > TASK_CLEANUP_THRESHOLD:
+            cleanup_stale_tasks()
 
         # Put task into queue and notify internal server
         task_queue.put(task)
@@ -78,32 +98,36 @@ async def convert_json(request):
         start_time = time.time()
         current_interval = 0
 
-        while True:
-            # Check if task is completed or failed
-            if tasks[task_id].status in ["completed", "failed"]:
-                if tasks[task_id].status == "completed":
-                    return web.json_response({
-                        "status": "success",
-                        "message": "Workflow converted successfully",
-                        "data": tasks[task_id].result
-                    })
-                else:
+        try:
+            while True:
+                # Check if task is completed or failed
+                if tasks[task_id].status in ["completed", "failed"]:
+                    if tasks[task_id].status == "completed":
+                        return web.json_response({
+                            "status": "success",
+                            "message": "Workflow converted successfully",
+                            "data": tasks[task_id].result
+                        })
+                    else:
+                        return web.json_response({
+                            "status": "error",
+                            "message": tasks[task_id].error or "Conversion failed",
+                        }, status=400)
+
+                # Check for timeout
+                if time.time() - start_time > TIMEOUT_SECONDS:
+                    tasks[task_id].update_status("failed", error="Task processing timeout")
                     return web.json_response({
                         "status": "error",
-                        "message": tasks[task_id].error or "Conversion failed",
-                    }, status=400)
+                        "message": "Workflow conversion timeout"
+                    }, status=408)  # 408 Request Timeout
 
-            # Check for timeout
-            if time.time() - start_time > TIMEOUT_SECONDS:
-                tasks[task_id].update_status("failed", error="Task processing timeout")
-                return web.json_response({
-                    "status": "error",
-                    "message": "Workflow conversion timeout"
-                }, status=408)  # 408 Request Timeout
-
-            # Wait for the current interval
-            await asyncio.sleep(POLLING_INTERVALS[min(current_interval, len(POLLING_INTERVALS) - 1)])
-            current_interval += 1
+                # Wait for the current interval
+                await asyncio.sleep(POLLING_INTERVALS[min(current_interval, len(POLLING_INTERVALS) - 1)])
+                current_interval += 1
+        finally:
+            # Always clean up the current task after response is determined
+            tasks.pop(task_id, None)
 
     except ValueError as e:
         logger.error("Validation error: %s", str(e))
@@ -354,9 +378,14 @@ async def get_and_convert_workflow(request):
         task = Task(
             id=task_id,
             status="pending",
-            data=workflow_data
+            data=workflow_data,
+            created_at=time.time()
         )
         tasks[task_id] = task
+
+        # Periodically clean up stale tasks to prevent memory leaks
+        if len(tasks) > TASK_CLEANUP_THRESHOLD:
+            cleanup_stale_tasks()
 
         # Put task into queue and notify internal server
         task_queue.put(task)
@@ -369,33 +398,37 @@ async def get_and_convert_workflow(request):
         start_time = time.time()
         current_interval = 0
 
-        while True:
-            # Check if task is completed or failed
-            if tasks[task_id].status in ["completed", "failed"]:
-                if tasks[task_id].status == "completed":
-                    return web.json_response({
-                        "status": "success",
-                        "message": "Workflow converted successfully",
-                        "filename": filename,
-                        "data": tasks[task_id].result
-                    })
-                else:
+        try:
+            while True:
+                # Check if task is completed or failed
+                if tasks[task_id].status in ["completed", "failed"]:
+                    if tasks[task_id].status == "completed":
+                        return web.json_response({
+                            "status": "success",
+                            "message": "Workflow converted successfully",
+                            "filename": filename,
+                            "data": tasks[task_id].result
+                        })
+                    else:
+                        return web.json_response({
+                            "status": "error",
+                            "message": tasks[task_id].error or "Conversion failed",
+                        }, status=400)
+
+                # Check for timeout
+                if time.time() - start_time > TIMEOUT_SECONDS:
+                    tasks[task_id].update_status("failed", error="Task processing timeout")
                     return web.json_response({
                         "status": "error",
-                        "message": tasks[task_id].error or "Conversion failed",
-                    }, status=400)
+                        "message": "Workflow conversion timeout"
+                    }, status=408)  # 408 Request Timeout
 
-            # Check for timeout
-            if time.time() - start_time > TIMEOUT_SECONDS:
-                tasks[task_id].update_status("failed", error="Task processing timeout")
-                return web.json_response({
-                    "status": "error",
-                    "message": "Workflow conversion timeout"
-                }, status=408)  # 408 Request Timeout
-
-            # Wait for the current interval
-            await asyncio.sleep(POLLING_INTERVALS[min(current_interval, len(POLLING_INTERVALS) - 1)])
-            current_interval += 1
+                # Wait for the current interval
+                await asyncio.sleep(POLLING_INTERVALS[min(current_interval, len(POLLING_INTERVALS) - 1)])
+                current_interval += 1
+        finally:
+            # Always clean up the current task after response is determined
+            tasks.pop(task_id, None)
 
     except ValueError as e:
         logger.error("Validation error: %s", str(e))
