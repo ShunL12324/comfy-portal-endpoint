@@ -20,28 +20,21 @@ def _ensure_playwright_chromium() -> bool:
         import playwright
     except ImportError:
         logger.info("Playwright not found, installing automatically...")
+        # Use the absolute path of the current Python interpreter to ensure
+        # we install into the correct environment (especially in venvs)
+        python_exe = sys.executable
+        logger.info("Using Python: %s", python_exe)
         try:
-            # Find pip executable next to the Python executable (works in venvs
-            # where `python -m pip` may fail due to missing pip bootstrap module)
-            pip_exe = os.path.join(os.path.dirname(sys.executable), "pip")
-            # On Windows, try pip.exe
-            if sys.platform == "win32":
-                pip_exe += ".exe"
-
-            if os.path.isfile(pip_exe):
-                install_cmd = [pip_exe, "install", "playwright"]
-            else:
-                # Fallback: ensure pip is available, then use python -m pip
-                subprocess.run(
-                    [sys.executable, "-m", "ensurepip", "--default-pip"],
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                )
-                install_cmd = [sys.executable, "-m", "pip", "install", "playwright"]
-
+            # First, ensure pip is available in this environment
             subprocess.run(
-                install_cmd,
+                [python_exe, "-m", "ensurepip", "--default-pip"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            # Now install playwright using the same Python's pip
+            subprocess.run(
+                [python_exe, "-m", "pip", "install", "playwright"],
                 capture_output=True,
                 text=True,
                 timeout=120,
