@@ -144,6 +144,23 @@ class HeadlessBrowserManager:
                 )
                 logger.info("Plugin JS loaded successfully")
 
+                # Wait for ComfyUI app to fully initialize (node types registered)
+                # The frontend fetches /object_info and registers all node types into
+                # LiteGraph. Without this, graph.configure() can't resolve class_type.
+                logger.info("Waiting for ComfyUI node types to be registered...")
+                await self._page.wait_for_function(
+                    """() => {
+                        if (typeof LiteGraph === 'undefined') return false;
+                        const types = LiteGraph.registered_node_types;
+                        return types && Object.keys(types).length > 0;
+                    }""",
+                    timeout=60000,
+                )
+                node_count = await self._page.evaluate(
+                    "() => Object.keys(LiteGraph.registered_node_types).length"
+                )
+                logger.info("ComfyUI node types registered: %d types loaded", node_count)
+
                 self._status = BrowserStatus.READY
                 logger.info("Headless browser initialized and ready for workflow conversion")
 
