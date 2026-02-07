@@ -16,13 +16,16 @@ def _ensure_playwright_chromium() -> bool:
     Returns:
         True if Playwright Chromium is ready, False otherwise.
     """
+    # Use the absolute path of the current Python interpreter to ensure
+    # we install into the correct environment (especially in venvs)
+    python_exe = sys.executable
+
     try:
         import playwright
     except ImportError:
-        logger.info("Playwright not found, installing automatically...")
-        # Use the absolute path of the current Python interpreter to ensure
-        # we install into the correct environment (especially in venvs)
-        python_exe = sys.executable
+        logger.info(
+            "Playwright not found. Installing automatically — this may take a while..."
+        )
         logger.info("Using Python: %s", python_exe)
         try:
             # First, ensure pip is available in this environment
@@ -32,25 +35,27 @@ def _ensure_playwright_chromium() -> bool:
                 text=True,
                 timeout=60,
             )
-            # Now install playwright using the same Python's pip
-            subprocess.run(
+            # Install playwright, stream output so user can see progress
+            process = subprocess.Popen(
                 [python_exe, "-m", "pip", "install", "playwright"],
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
-                timeout=120,
-                check=True,
             )
+            for line in process.stdout:
+                line = line.rstrip()
+                if line:
+                    logger.info("[pip] %s", line)
+            process.wait(timeout=120)
+            if process.returncode != 0:
+                logger.error(
+                    "pip install playwright failed with return code %d. "
+                    "Try manually: pip install playwright",
+                    process.returncode,
+                )
+                return False
             logger.info("Playwright pip package installed successfully")
             import playwright
-        except subprocess.CalledProcessError as e:
-            logger.error(
-                "Failed to auto-install Playwright. "
-                "Return code: %d. stderr: %s. "
-                "Try manually: pip install playwright",
-                e.returncode,
-                e.stderr.strip() if e.stderr else "(empty)",
-            )
-            return False
         except subprocess.TimeoutExpired:
             logger.error(
                 "Playwright pip install timed out. "
@@ -72,22 +77,29 @@ def _ensure_playwright_chromium() -> bool:
             return False
 
     try:
-        logger.info("Checking Playwright Chromium browser installation...")
-        result = subprocess.run(
-            [sys.executable, "-m", "playwright", "install", "chromium"],
-            capture_output=True,
-            text=True,
-            timeout=300,  # 5 minute timeout
+        logger.info(
+            "Checking Playwright Chromium browser — "
+            "first time download may take a few minutes..."
         )
-        if result.returncode == 0:
+        process = subprocess.Popen(
+            [python_exe, "-m", "playwright", "install", "chromium"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        for line in process.stdout:
+            line = line.rstrip()
+            if line:
+                logger.info("[playwright] %s", line)
+        process.wait(timeout=300)
+        if process.returncode == 0:
             logger.info("Playwright Chromium browser is ready")
             return True
         else:
             logger.error(
-                "Failed to install Playwright Chromium browser. "
-                "Return code: %d. stderr: %s",
-                result.returncode,
-                result.stderr.strip() if result.stderr else "(empty)",
+                "Failed to install Playwright Chromium browser (return code %d). "
+                "Try manually: python -m playwright install chromium",
+                process.returncode,
             )
             return False
     except subprocess.TimeoutExpired:

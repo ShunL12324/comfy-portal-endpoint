@@ -267,9 +267,25 @@ class HeadlessBrowserManager:
                     raise RuntimeError(self._error_message) from retry_error
 
     async def _do_convert(self, workflow_data: dict) -> dict:
-        """Execute the actual conversion in the browser page."""
+        """Execute the actual conversion in the browser page.
+
+        Reloads the page before each conversion to ensure a clean frontend state.
+        """
         if self._page is None:
             raise RuntimeError("Browser page is not available")
+
+        # Reload the page to reset frontend state before conversion
+        await self._page.reload(wait_until="domcontentloaded", timeout=30000)
+        await self._page.wait_for_function(
+            """() => {
+                if (typeof window.LGraph === 'undefined') return false;
+                if (typeof window.__cpe_graphToPrompt === 'undefined') return false;
+                if (typeof LiteGraph === 'undefined') return false;
+                const types = LiteGraph.registered_node_types;
+                return types && Object.keys(types).length > 0;
+            }""",
+            timeout=30000,
+        )
 
         result = await self._page.evaluate(
             """async (workflowData) => {
