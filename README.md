@@ -5,69 +5,122 @@
 [![ComfyUI](https://img.shields.io/badge/ComfyUI-Extension-green.svg)](https://github.com/comfyanonymous/ComfyUI)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)]()
 
-A ComfyUI extension that provides API endpoints for workflow management, designed to power [Comfy Portal](https://github.com/ShunL12324/comfy-portal) - a modern iOS client for ComfyUI.
+A ComfyUI custom node extension that exposes REST API endpoints for workflow management and format conversion. Built to power [Comfy Portal](https://github.com/ShunL12324/comfy-portal) — a native iOS client for ComfyUI.
 
-## Features
+---
 
-- **Workflow Management** - List, retrieve, and save workflows via REST API
-- **Format Conversion** - Convert UI workflows to API-executable format
-- **Headless Browser** - Uses Playwright Chromium for conversion — no real browser needed
-- **Works Everywhere** - Runs on headless Linux servers, Docker containers, and any environment
+## Overview
 
-## Requirements
+ComfyUI stores workflows in a **UI format** (full graph with node positions, groups, and metadata), but its execution engine requires an **API format** (flat node-to-node mapping). This extension bridges the gap by providing HTTP endpoints that manage workflow files and perform the UI → API conversion server-side.
 
-- Python 3.8+
-- ComfyUI
-- [Playwright](https://playwright.dev/python/) (installed automatically via `requirements.txt`)
+Conversion is powered by a **headless Chromium browser** (via [Playwright](https://playwright.dev/python/)) that loads the actual ComfyUI frontend, ensuring 100% compatibility with all node types — including custom nodes.
 
-| Use Case | Supported |
-|----------|-----------|
-| iOS App (WebView) | Yes |
-| Browser-based | Yes |
-| Headless/API-only | Yes |
+### Key Features
+
+- **Workflow CRUD** — List, read, and save workflow files through a clean REST interface
+- **Server-side Conversion** — Convert UI workflows to API-executable format without a browser tab
+- **Zero Configuration** — Playwright and Chromium are auto-installed on first startup
+- **Environment Agnostic** — Works on headless Linux servers, Docker containers, cloud VMs, and local machines
+- **Self-healing** — Automatic browser recovery on crash; lazy initialization on first request
+
+---
+
+## Compatibility
+
+| Environment | Supported |
+|-------------|-----------|
+| Windows / macOS / Linux | ✅ |
+| Headless server (no display) | ✅ |
+| Docker container | ✅ |
+| Cloud VM (SSH-only) | ✅ |
+| ComfyUI ≥ 0.12.x | ✅ |
+
+---
 
 ## Installation
+
+### Via Git (recommended)
 
 ```bash
 cd ComfyUI/custom_nodes
 git clone https://github.com/ShunL12324/comfy-portal-endpoint
-pip install -r comfy-portal-endpoint/requirements.txt
 ```
 
-Restart ComfyUI to activate the extension. On first startup, the plugin will automatically install the Chromium browser binary for Playwright (this may take a minute).
+### Via ComfyUI Manager
 
-You should see in the console:
+Search for **comfy-portal-endpoint** in the ComfyUI Manager and install.
+
+### Post-install
+
+Restart ComfyUI. On first startup the extension will:
+
+1. **Auto-install** the `playwright` Python package (if not present)
+2. **Auto-download** the Chromium browser binary (~170 MB, one-time)
+
+Console output during setup:
+
 ```
-[comfy-portal-endpoint] [INFO] Checking Playwright Chromium browser installation...
+[comfy-portal-endpoint] [INFO] Playwright not found. Installing automatically — this may take a while...
+[comfy-portal-endpoint] [INFO] [pip] Successfully installed playwright-1.58.0
+[comfy-portal-endpoint] [INFO] Checking Playwright Chromium browser — first time download may take a few minutes...
+[comfy-portal-endpoint] [INFO] [playwright] Downloading Chromium: 100% of 172.8 MiB
 [comfy-portal-endpoint] [INFO] Playwright Chromium browser is ready
 ```
 
-## How It Works
+> **Note:** The first startup takes ~60–90 seconds for the download. Subsequent restarts add zero overhead.
 
-Workflow conversion uses a **headless Chromium browser** managed by Playwright:
+---
 
-1. On the first conversion request, a headless browser is launched and navigates to the ComfyUI page
-2. The browser loads LiteGraph and the plugin's JavaScript
-3. Conversion runs via `page.evaluate()` calling `graphToPrompt()` in the browser context
-4. The browser stays running for subsequent requests (sub-second response times)
+## Architecture
 
 ```
-HTTP Request → HeadlessBrowserManager.convert_workflow() → page.evaluate(JS) → Response
+┌─────────────────────────────────────────────────────────┐
+│  Client (iOS App / curl / any HTTP client)              │
+└──────────────────────┬──────────────────────────────────┘
+                       │ HTTP
+┌──────────────────────▼──────────────────────────────────┐
+│  ComfyUI PromptServer (aiohttp)                         │
+│  ┌────────────────────────────────────────────────────┐ │
+│  │  comfy-portal-endpoint                             │ │
+│  │                                                    │ │
+│  │  /cpe/workflow/list    → File system scan          │ │
+│  │  /cpe/workflow/get     → File read                 │ │
+│  │  /cpe/workflow/save    → File write                │ │
+│  │  /cpe/workflow/convert → HeadlessBrowserManager    │ │
+│  │  /cpe/health           → Browser status            │ │
+│  └──────────────────────────┬─────────────────────────┘ │
+│                             │ page.evaluate(JS)         │
+│  ┌──────────────────────────▼─────────────────────────┐ │
+│  │  Headless Chromium (Playwright)                    │ │
+│  │  ┌──────────────────────────────────────────────┐  │ │
+│  │  │  ComfyUI Frontend                            │  │ │
+│  │  │  LiteGraph + registered node types           │  │ │
+│  │  │  window.__cpe_graphToPrompt()                │  │ │
+│  │  └──────────────────────────────────────────────┘  │ │
+│  └────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────┘
 ```
+
+**Conversion flow:**
+
+1. HTTP request arrives at `/cpe/workflow/convert`
+2. `HeadlessBrowserManager` ensures the browser is initialized (lazy, one-time)
+3. Page is reloaded to guarantee a clean state
+4. `page.evaluate()` runs `graphToPrompt()` inside the real ComfyUI frontend context
+5. Result is returned as JSON — all node types, widget values, and connections are fully resolved
+
+---
 
 ## API Reference
 
-All endpoints are prefixed with `/api/cpe/`.
+All endpoints are served under ComfyUI's HTTP server. When accessed through the default proxy, prefix with `/api`.
 
-### Health Check
+### `GET /cpe/health`
 
-```http
-GET /api/cpe/health
-```
-
-Returns the headless browser status.
+Returns the current status of the headless browser.
 
 **Response:**
+
 ```json
 {
   "status": "success",
@@ -77,84 +130,159 @@ Returns the headless browser status.
 }
 ```
 
-Possible browser statuses: `not_installed`, `not_initialized`, `initializing`, `ready`, `error`.
+| Browser Status | Description |
+|----------------|-------------|
+| `not_installed` | Playwright package is missing |
+| `not_initialized` | Browser has not been started yet (starts on first convert) |
+| `initializing` | Browser is currently starting up |
+| `ready` | Browser is running and ready for conversion |
+| `error` | Browser encountered an error (see `error` field) |
 
-### List Workflows
+---
 
-```http
-GET /api/cpe/workflow/list
+### `GET /cpe/workflow/list`
+
+List all workflow files in the user's workflow directory.
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "workflows": [
+    {
+      "filename": "my_workflow.json",
+      "size": 4096,
+      "modified": 1706000000.0
+    }
+  ]
+}
 ```
 
-Returns all workflows with metadata (filename, size, modified time).
+---
 
-### Get Workflow
+### `GET /cpe/workflow/get`
 
-```http
-GET /api/cpe/workflow/get?filename=<name>
-```
+Retrieve the raw content of a workflow file.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `filename` | string | Yes | Workflow filename |
+| `filename` | `string` | Yes | Path relative to the workflows directory |
 
-### Save Workflow
+**Response:**
 
-```http
-POST /api/cpe/workflow/save
-Content-Type: application/json
-
+```json
 {
-  "workflow": "<workflow_json_string>",
-  "name": "my_workflow"
+  "status": "success",
+  "filename": "my_workflow.json",
+  "workflow": "<raw JSON string>"
+}
+```
+
+---
+
+### `POST /cpe/workflow/save`
+
+Save a workflow file to disk.
+
+**Request body:**
+
+```json
+{
+  "workflow": "<workflow JSON string>",
+  "name": "my_workflow.json"
 }
 ```
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `workflow` | string | Yes | Workflow JSON string |
-| `name` | string | No | Filename (auto-generated if omitted) |
+| `workflow` | `string` | Yes | Workflow JSON as a string |
+| `name` | `string` | No | Filename (auto-generated as `workflow_<timestamp>.json` if omitted) |
 
-### Convert Workflow
+---
 
-```http
-POST /api/cpe/workflow/convert
-Content-Type: application/json
+### `POST /cpe/workflow/convert`
 
+Convert a workflow from UI format to API-executable format.
+
+**Request body:**
+
+```json
 {
-  "workflow": <workflow_json_object>
+  <workflow JSON object>
 }
 ```
 
-Converts UI format to API-executable format using the headless browser. The first request may take 5–10 seconds (browser startup); subsequent requests are sub-second.
+**Response:**
 
-### Get and Convert (Recommended)
-
-```http
-GET /api/cpe/workflow/get-and-convert?filename=<name>
+```json
+{
+  "status": "success",
+  "message": "Workflow converted successfully",
+  "data": {
+    "workflow": {
+      "1": {
+        "inputs": { "ckpt_name": "model.safetensors" },
+        "class_type": "CheckpointLoaderSimple",
+        "_meta": { "title": "Load Checkpoint" }
+      }
+    }
+  }
+}
 ```
 
-Combines retrieval and conversion in a single request.
+| Status Code | Meaning |
+|-------------|---------|
+| `200` | Conversion successful |
+| `400` | Invalid request body |
+| `503` | Browser unavailable — Playwright not installed or Chromium failed to start |
 
-## Workflow Formats
+> **Performance:** First request takes 5–15 seconds (browser startup + page load). Subsequent requests complete in ~1–2 seconds.
 
-| Format | Description | Usage |
-|--------|-------------|-------|
-| **UI Format** | Full graph with positions, groups, metadata | Web interface, `.json` files |
-| **API Format** | Simplified execution data with node mappings | `/prompt` endpoint execution |
+---
+
+### `GET /cpe/workflow/get-and-convert`
+
+Retrieve a workflow file and convert it in a single request. This is the **recommended** endpoint for clients.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `filename` | `string` | Yes | Path relative to the workflows directory |
+
+**Response:** Same as `/cpe/workflow/convert`, with an additional `filename` field.
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause | Solution |
+|---------|-------|----------|
+| `503` on convert | Playwright or Chromium not available | Check logs; run `pip install playwright && python -m playwright install chromium` in your ComfyUI Python environment |
+| First convert takes 10+ seconds | Normal cold start | The headless browser needs to launch and load the ComfyUI frontend. Subsequent requests are fast |
+| `class_type: null` in output | Node types not registered | The browser page didn't fully initialize. Check that ComfyUI is healthy and retry |
+| `not_installed` in `/cpe/health` | `playwright` pip package missing | Restart ComfyUI to trigger auto-install, or run `pip install playwright` manually |
+| Browser crash / `error` status | Chromium process died | Auto-recovers on next convert request. Check `/cpe/health` to verify |
+| Linux: missing shared libraries | Chromium requires system dependencies | Run `python -m playwright install-deps chromium` (requires root) |
+| Docker: browser fails to launch | Missing `--no-sandbox` or system deps | Ensure your Dockerfile installs Playwright deps: `RUN playwright install-deps chromium` |
+
+---
 
 ## Changelog
 
 ### v1.1.0
 
-- **Breaking:** Replaced WebSocket/callback conversion with Playwright headless browser
-- Workflow conversion now works without any real browser connection
-- Added `/cpe/health` endpoint for browser status monitoring
-- Added automatic Playwright Chromium installation on plugin load
-- Added automatic browser recovery on conversion failure
-- Removed `/cpe/workflow/convert/callback` endpoint (no longer needed)
-- Supports headless Linux servers and Docker containers
+- Replaced WebSocket/callback architecture with Playwright headless browser
+- Conversion now works on headless servers, Docker, and cloud VMs — no browser tab required
+- Auto-installs `playwright` pip package and Chromium binary on first startup
+- Added `/cpe/health` endpoint for monitoring browser status
+- Added automatic browser recovery on failure with single-retry logic
+- Page is reloaded before each conversion to ensure clean frontend state
+- Waits for full node type registration before marking browser as ready
+- Streamed install progress with sanitized log output
+- Removed `/cpe/workflow/convert/callback` endpoint
+- Removed WebSocket event system and task queue
 
-### v1.0.2 (2025-11-26)
+### v1.0.2
 
 - Fixed array widget values being misinterpreted as node connections
 - Updated conversion logic to match ComfyUI frontend v1.9.10+
@@ -162,15 +290,7 @@ Combines retrieval and conversion in a single request.
 - Added widget name validation
 - Enhanced virtual node and BYPASS mode support
 
-## Troubleshooting
-
-| Issue | Cause | Solution |
-|-------|-------|----------|
-| 503 on convert | Playwright not installed or browser failed to start | Check logs; run `pip install playwright && python -m playwright install chromium` |
-| First convert is slow | Browser starting up for the first time | Normal — subsequent requests will be fast |
-| `not_installed` status | Playwright pip package missing | Run `pip install -r requirements.txt` |
-| Browser crash / error | Chromium process died | The plugin auto-recovers on next request; check `/cpe/health` for status |
-| Linux missing deps | Chromium needs system libraries | Run `python -m playwright install-deps chromium` |
+---
 
 ## License
 
