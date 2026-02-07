@@ -1,10 +1,32 @@
 import os
 import sys
+import re
 import subprocess
 from .logger import get_logger
 from .api import workflow
 
 logger = get_logger()
+
+
+def _sanitize_log_line(line: str) -> str:
+    """Remove progress bar characters and clean up a log line.
+
+    Playwright's download progress uses Unicode block characters that
+    display as garbled text in many terminals. Extract just the percentage
+    and file size info instead.
+    """
+    line = line.rstrip()
+    if not line:
+        return ""
+
+    # Match progress bar lines like "|████▌   | 50% of 108.8 MiB"
+    match = re.search(r'(\d+%\s+of\s+[\d.]+\s+\w+)', line)
+    if match:
+        return f"Downloading Chromium: {match.group(1)}"
+
+    # Strip any non-ASCII characters that might cause encoding issues
+    cleaned = line.encode('ascii', errors='ignore').decode('ascii').strip()
+    return cleaned if cleaned else ""
 
 
 def _ensure_playwright_chromium() -> bool:
@@ -43,9 +65,9 @@ def _ensure_playwright_chromium() -> bool:
                 text=True,
             )
             for line in process.stdout:
-                line = line.rstrip()
-                if line:
-                    logger.info("[pip] %s", line)
+                cleaned = _sanitize_log_line(line)
+                if cleaned:
+                    logger.info("[pip] %s", cleaned)
             process.wait(timeout=120)
             if process.returncode != 0:
                 logger.error(
@@ -88,9 +110,9 @@ def _ensure_playwright_chromium() -> bool:
             text=True,
         )
         for line in process.stdout:
-            line = line.rstrip()
-            if line:
-                logger.info("[playwright] %s", line)
+            cleaned = _sanitize_log_line(line)
+            if cleaned:
+                logger.info("[playwright] %s", cleaned)
         process.wait(timeout=300)
         if process.returncode == 0:
             logger.info("Playwright Chromium browser is ready")
