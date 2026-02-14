@@ -3,6 +3,7 @@ import logging
 def get_logger(name='comfy-portal'):
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
+    logger.propagate = False
 
     # Avoid adding handlers if they already exist
     if not logger.handlers:
