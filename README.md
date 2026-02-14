@@ -1,6 +1,6 @@
 # ComfyUI Portal Endpoint
 
-[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/ShunL12324/comfy-portal-endpoint/releases)
+[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](https://github.com/ShunL12324/comfy-portal-endpoint/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![ComfyUI](https://img.shields.io/badge/ComfyUI-Extension-green.svg)](https://github.com/comfyanonymous/ComfyUI)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)]()
@@ -55,7 +55,8 @@ Search for **comfy-portal-endpoint** in the ComfyUI Manager and install.
 Restart ComfyUI. On first startup the extension will:
 
 1. **Auto-install** the `playwright` Python package (if not present)
-2. **Auto-download** the Chromium browser binary (~170 MB, one-time)
+2. **Auto-install** system dependencies on Linux (e.g. `libnspr4`, `libnss3` — requires root, skipped if unavailable)
+3. **Auto-download** the Chromium browser binary (~170 MB, one-time)
 
 Console output during setup:
 
@@ -86,18 +87,18 @@ Console output during setup:
 │  │  /cpe/workflow/list    → File system scan          │ │
 │  │  /cpe/workflow/get     → File read                 │ │
 │  │  /cpe/workflow/save    → File write                │ │
-│  │  /cpe/workflow/convert → HeadlessBrowserManager    │ │
-│  │  /cpe/health           → Browser status            │ │
-│  └──────────────────────────┬─────────────────────────┘ │
-│                             │ page.evaluate(JS)         │
-│  ┌──────────────────────────▼─────────────────────────┐ │
-│  │  Headless Chromium (Playwright)                    │ │
-│  │  ┌──────────────────────────────────────────────┐  │ │
-│  │  │  ComfyUI Frontend                            │  │ │
-│  │  │  LiteGraph + registered node types           │  │ │
-│  │  │  window.__cpe_graphToPrompt()                │  │ │
-│  │  └──────────────────────────────────────────────┘  │ │
-│  └────────────────────────────────────────────────────┘ │
+│  │  /cpe/workflow/convert → HeadlessBrowserManager ──┐│ │
+│  │  /cpe/health           → Browser status           ││ │
+│  └───────────────────────────────────────────────────┘│ │
+│                                                       │ │
+│  ┌────────────────────────────────────────────────────┘ │
+│  │  Headless Chromium (Playwright)                      │
+│  │  ┌─────────────────┐  ┌─────────────────┐           │
+│  │  │  Page 1          │  │  Page 2          │  (pool)  │
+│  │  │  ComfyUI Frontend│  │  ComfyUI Frontend│          │
+│  │  │  LiteGraph + nodes│  │  LiteGraph + nodes│         │
+│  │  └─────────────────┘  └─────────────────┘           │
+│  └──────────────────────────────────────────────────────┘
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -105,9 +106,11 @@ Console output during setup:
 
 1. HTTP request arrives at `/cpe/workflow/convert`
 2. `HeadlessBrowserManager` ensures the browser is initialized (lazy, one-time)
-3. Page is reloaded to guarantee a clean state
-4. `page.evaluate()` runs `graphToPrompt()` inside the real ComfyUI frontend context
-5. Result is returned as JSON — all node types, widget values, and connections are fully resolved
+3. A page is acquired from the pool (default 2 pages for concurrent requests)
+4. Page is reloaded to guarantee a clean state
+5. `page.evaluate()` runs `graphToPrompt()` inside the real ComfyUI frontend context
+6. Result is returned as JSON — all node types, widget values, and connections are fully resolved
+7. Page is returned to the pool for reuse
 
 ---
 
@@ -262,12 +265,21 @@ Retrieve a workflow file and convert it in a single request. This is the **recom
 | `class_type: null` in output | Node types not registered | The browser page didn't fully initialize. Check that ComfyUI is healthy and retry |
 | `not_installed` in `/cpe/health` | `playwright` pip package missing | Restart ComfyUI to trigger auto-install, or run `pip install playwright` manually |
 | Browser crash / `error` status | Chromium process died | Auto-recovers on next convert request. Check `/cpe/health` to verify |
-| Linux: missing shared libraries | Chromium requires system dependencies | Run `python -m playwright install-deps chromium` (requires root) |
+| Linux: missing shared libraries | Chromium requires system dependencies | Auto-installed on startup if root is available. Otherwise run `sudo python -m playwright install-deps` manually |
 | Docker: browser fails to launch | Missing `--no-sandbox` or system deps | Ensure your Dockerfile installs Playwright deps: `RUN playwright install-deps chromium` |
 
 ---
 
 ## Changelog
+
+### v1.2.0
+
+- Added page pool (default 2 pages) for concurrent workflow conversions
+- Auto-install system dependencies on Linux (`playwright install-deps`) before Chromium install
+- Auto-install pip via `get-pip.py` when `ensurepip` is unavailable
+- Replaced fragile browser process cleanup with Playwright driver PID-based `atexit` handler
+- Broken pages are automatically discarded and replaced instead of poisoning the pool
+- Fixed duplicate log output caused by logger propagation
 
 ### v1.1.0
 
