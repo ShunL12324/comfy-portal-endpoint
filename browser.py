@@ -1,11 +1,16 @@
 import asyncio
 import atexit
 import enum
-from typing import Optional, Any
+import os
+import signal
+from typing import Optional, Any, List
 
 from .logger import get_logger
 
 logger = get_logger()
+
+# Default number of pages in the pool
+DEFAULT_POOL_SIZE = 2
 
 
 class BrowserStatus(enum.Enum):
@@ -17,21 +22,23 @@ class BrowserStatus(enum.Enum):
 
 
 class HeadlessBrowserManager:
-    """Manages a headless Chromium browser for workflow conversion.
+    """Manages a headless Chromium browser with a page pool for workflow conversion.
 
     Uses Playwright to load the ComfyUI frontend in a headless browser,
     then calls the graphToPrompt JS function via page.evaluate().
+    A pool of pages allows concurrent conversions without blocking.
     """
 
-    def __init__(self):
+    def __init__(self, pool_size: int = DEFAULT_POOL_SIZE):
         self._status: BrowserStatus = BrowserStatus.NOT_INITIALIZED
         self._error_message: Optional[str] = None
         self._playwright = None
         self._browser = None
-        self._context = None
-        self._page = None
+        self._driver_pid: Optional[int] = None
+        self._contexts: List = []
+        self._page_pool: asyncio.Queue = None
+        self._pool_size = pool_size
         self._init_lock: Optional[asyncio.Lock] = None
-        self._lock: Optional[asyncio.Lock] = None
 
         # Register synchronous cleanup at process exit
         atexit.register(self._sync_cleanup)
@@ -41,12 +48,6 @@ class HeadlessBrowserManager:
         if self._init_lock is None:
             self._init_lock = asyncio.Lock()
         return self._init_lock
-
-    def _get_lock(self) -> asyncio.Lock:
-        """Lazily create the conversion lock (must be in an event loop context)."""
-        if self._lock is None:
-            self._lock = asyncio.Lock()
-        return self._lock
 
     @property
     def status(self) -> BrowserStatus:
@@ -70,19 +71,54 @@ class HeadlessBrowserManager:
 
         return f"http://{address}:{port}"
 
+    async def _wait_for_comfyui_ready(self, page) -> None:
+        """Wait for ComfyUI frontend to be fully loaded on a page."""
+        # Wait for LiteGraph to be loaded (window.LGraph)
+        await page.wait_for_function(
+            "() => typeof window.LGraph !== 'undefined'",
+            timeout=30000,
+        )
+
+        # Wait for our plugin JS to expose __cpe_graphToPrompt
+        await page.wait_for_function(
+            "() => typeof window.__cpe_graphToPrompt !== 'undefined'",
+            timeout=30000,
+        )
+
+        # Wait for ComfyUI node types to be registered
+        await page.wait_for_function(
+            """() => {
+                if (typeof LiteGraph === 'undefined') return false;
+                const types = LiteGraph.registered_node_types;
+                return types && Object.keys(types).length > 0;
+            }""",
+            timeout=60000,
+        )
+
+    async def _create_page(self, comfyui_url: str):
+        """Create a new browser context + page and wait for ComfyUI to load."""
+        context = await self._browser.new_context()
+        page = await context.new_page()
+
+        await page.goto(comfyui_url, timeout=60000, wait_until="domcontentloaded")
+        await self._wait_for_comfyui_ready(page)
+
+        self._contexts.append(context)
+        return page
+
     async def initialize(self) -> None:
-        """Initialize the headless browser and load ComfyUI page.
+        """Initialize the headless browser and create a pool of pages.
 
         This is idempotent - if already READY, it returns immediately.
         Uses _init_lock to prevent concurrent initialization.
         """
-        if self._status == BrowserStatus.READY and self._page is not None:
+        if self._status == BrowserStatus.READY and self._page_pool is not None:
             return
 
         init_lock = self._get_init_lock()
         async with init_lock:
             # Double-check after acquiring lock
-            if self._status == BrowserStatus.READY and self._page is not None:
+            if self._status == BrowserStatus.READY and self._page_pool is not None:
                 return
 
             self._status = BrowserStatus.INITIALIZING
@@ -120,49 +156,36 @@ class HeadlessBrowserManager:
                     ],
                 )
 
-                # Create browser context and page
-                self._context = await self._browser.new_context()
-                self._page = await self._context.new_page()
+                # Capture Playwright driver PID for reliable atexit cleanup.
+                # The driver subprocess manages Chromium — killing it cascades
+                # to the browser process as well.
+                try:
+                    transport = self._playwright._connection._transport
+                    self._driver_pid = transport._proc.pid
+                    logger.info("Playwright driver PID: %d", self._driver_pid)
+                except Exception:
+                    logger.warning("Could not capture Playwright driver PID")
 
-                # Navigate to ComfyUI page with 60s timeout
-                logger.info("Loading ComfyUI page...")
-                await self._page.goto(comfyui_url, timeout=60000, wait_until="domcontentloaded")
+                # Create page pool
+                self._page_pool = asyncio.Queue()
+                self._contexts = []
 
-                # Wait for LiteGraph to be loaded (window.LGraph)
-                logger.info("Waiting for LiteGraph (window.LGraph) to load...")
-                await self._page.wait_for_function(
-                    "() => typeof window.LGraph !== 'undefined'",
-                    timeout=30000,
-                )
-                logger.info("LiteGraph loaded successfully")
+                logger.info("Creating %d browser pages...", self._pool_size)
+                for i in range(self._pool_size):
+                    logger.info("Loading ComfyUI page %d/%d...", i + 1, self._pool_size)
+                    page = await self._create_page(comfyui_url)
+                    await self._page_pool.put(page)
 
-                # Wait for our plugin JS to expose __cpe_graphToPrompt
-                logger.info("Waiting for plugin JS (window.__cpe_graphToPrompt) to load...")
-                await self._page.wait_for_function(
-                    "() => typeof window.__cpe_graphToPrompt !== 'undefined'",
-                    timeout=30000,
-                )
-                logger.info("Plugin JS loaded successfully")
-
-                # Wait for ComfyUI app to fully initialize (node types registered)
-                # The frontend fetches /object_info and registers all node types into
-                # LiteGraph. Without this, graph.configure() can't resolve class_type.
-                logger.info("Waiting for ComfyUI node types to be registered...")
-                await self._page.wait_for_function(
-                    """() => {
-                        if (typeof LiteGraph === 'undefined') return false;
-                        const types = LiteGraph.registered_node_types;
-                        return types && Object.keys(types).length > 0;
-                    }""",
-                    timeout=60000,
-                )
-                node_count = await self._page.evaluate(
+                node_count = await (await self._peek_page()).evaluate(
                     "() => Object.keys(LiteGraph.registered_node_types).length"
                 )
                 logger.info("ComfyUI node types registered: %d types loaded", node_count)
 
                 self._status = BrowserStatus.READY
-                logger.info("Headless browser initialized and ready for workflow conversion")
+                logger.info(
+                    "Headless browser initialized with %d pages, ready for workflow conversion",
+                    self._pool_size,
+                )
 
             except Exception as e:
                 self._status = BrowserStatus.ERROR
@@ -172,22 +195,32 @@ class HeadlessBrowserManager:
                 await self._cleanup()
                 raise RuntimeError(self._error_message) from e
 
-    async def _cleanup(self) -> None:
-        """Clean up browser resources."""
-        try:
-            if self._page is not None:
-                try:
-                    await self._page.close()
-                except Exception:
-                    pass
-                self._page = None
+    async def _peek_page(self):
+        """Get a page from the pool temporarily for inspection, then put it back."""
+        page = await self._page_pool.get()
+        await self._page_pool.put(page)
+        return page
 
-            if self._context is not None:
+    async def _cleanup(self) -> None:
+        """Clean up all browser resources."""
+        try:
+            # Drain and close all pages
+            if self._page_pool is not None:
+                while not self._page_pool.empty():
+                    try:
+                        page = self._page_pool.get_nowait()
+                        await page.close()
+                    except Exception:
+                        pass
+                self._page_pool = None
+
+            # Close all contexts
+            for ctx in self._contexts:
                 try:
-                    await self._context.close()
+                    await ctx.close()
                 except Exception:
                     pass
-                self._context = None
+            self._contexts = []
 
             if self._browser is not None:
                 try:
@@ -202,21 +235,25 @@ class HeadlessBrowserManager:
                 except Exception:
                     pass
                 self._playwright = None
+
+            self._driver_pid = None
         except Exception as e:
             logger.error("Error during browser cleanup: %s", str(e))
 
     def _sync_cleanup(self) -> None:
-        """Synchronous cleanup for atexit - forcefully kills browser process."""
-        if self._browser is not None:
+        """Synchronous cleanup for atexit — kills Playwright driver process by PID.
+
+        The Playwright driver (a Node.js subprocess) manages the Chromium browser.
+        Killing the driver cascades to the browser process automatically.
+        """
+        if self._driver_pid is not None:
             try:
-                # Playwright browser has a process we can kill directly
-                if hasattr(self._browser, '_impl_obj') and self._browser._impl_obj:
-                    process = getattr(self._browser._impl_obj, '_process', None)
-                    if process:
-                        process.kill()
-                        logger.info("Killed headless browser process on exit")
+                os.kill(self._driver_pid, signal.SIGTERM)
+                logger.info("Sent SIGTERM to Playwright driver (PID %d)", self._driver_pid)
+            except ProcessLookupError:
+                pass  # Already exited
             except Exception as e:
-                logger.error("Error killing browser process on exit: %s", str(e))
+                logger.error("Error killing Playwright driver (PID %d): %s", self._driver_pid, str(e))
 
     async def shutdown(self) -> None:
         """Gracefully shut down the browser."""
@@ -228,6 +265,10 @@ class HeadlessBrowserManager:
 
     async def convert_workflow(self, workflow_data: dict) -> dict:
         """Convert a workflow from UI format to API format.
+
+        Acquires a page from the pool, performs the conversion, and returns
+        the page to the pool. Multiple conversions can run concurrently
+        up to the pool size.
 
         Args:
             workflow_data: The workflow JSON data in UI format.
@@ -242,52 +283,42 @@ class HeadlessBrowserManager:
         if self._status != BrowserStatus.READY:
             await self.initialize()
 
-        lock = self._get_lock()
-        async with lock:
+        # Acquire a page from the pool (blocks if all pages are busy)
+        page = await self._page_pool.get()
+        try:
+            result = await self._do_convert(page, workflow_data)
+            return result
+        except Exception as first_error:
+            logger.warning(
+                "Workflow conversion failed, attempting recovery: %s",
+                str(first_error),
+            )
+            # Recovery: _do_convert already reloads the page, so just retry
             try:
-                result = await self._do_convert(workflow_data)
+                result = await self._do_convert(page, workflow_data)
+                logger.info("Recovery successful, conversion completed on retry")
                 return result
-            except Exception as first_error:
-                logger.warning(
-                    "Workflow conversion failed, attempting recovery: %s",
-                    str(first_error),
-                )
-                # Recovery: cleanup, re-init, retry once
-                try:
-                    await self._cleanup()
-                    self._status = BrowserStatus.NOT_INITIALIZED
-                    await self.initialize()
-                    result = await self._do_convert(workflow_data)
-                    logger.info("Recovery successful, conversion completed on retry")
-                    return result
-                except Exception as retry_error:
-                    self._status = BrowserStatus.ERROR
-                    self._error_message = f"Conversion failed after retry: {str(retry_error)}"
-                    logger.error(self._error_message)
-                    raise RuntimeError(self._error_message) from retry_error
+            except Exception as retry_error:
+                self._status = BrowserStatus.ERROR
+                self._error_message = f"Conversion failed after retry: {str(retry_error)}"
+                logger.error(self._error_message)
+                raise RuntimeError(self._error_message) from retry_error
+        finally:
+            # Always return the page to the pool
+            await self._page_pool.put(page)
 
-    async def _do_convert(self, workflow_data: dict) -> dict:
-        """Execute the actual conversion in the browser page.
+    async def _do_convert(self, page, workflow_data: dict) -> dict:
+        """Execute the actual conversion in a browser page.
 
-        Reloads the page before each conversion to ensure a clean frontend state.
+        Reloads the page before each conversion to ensure a clean frontend state,
+        since ComfyUI extensions modify LiteGraph globals that persist across
+        graph instances.
         """
-        if self._page is None:
-            raise RuntimeError("Browser page is not available")
-
         # Reload the page to reset frontend state before conversion
-        await self._page.reload(wait_until="domcontentloaded", timeout=30000)
-        await self._page.wait_for_function(
-            """() => {
-                if (typeof window.LGraph === 'undefined') return false;
-                if (typeof window.__cpe_graphToPrompt === 'undefined') return false;
-                if (typeof LiteGraph === 'undefined') return false;
-                const types = LiteGraph.registered_node_types;
-                return types && Object.keys(types).length > 0;
-            }""",
-            timeout=30000,
-        )
+        await page.reload(wait_until="domcontentloaded", timeout=30000)
+        await self._wait_for_comfyui_ready(page)
 
-        result = await self._page.evaluate(
+        result = await page.evaluate(
             """async (workflowData) => {
                 try {
                     const graph = new window.LGraph();

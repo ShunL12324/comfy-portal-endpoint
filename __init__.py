@@ -98,6 +98,46 @@ def _ensure_playwright_chromium() -> bool:
             )
             return False
 
+    # On Linux, attempt to install system dependencies (e.g. libnspr4, libnss3)
+    # before installing Chromium. Requires root/sudo — if it fails, we log a
+    # warning and continue, since the user may already have them installed.
+    if sys.platform.startswith("linux"):
+        logger.info("Linux detected — attempting to install Playwright system dependencies...")
+        try:
+            deps_process = subprocess.Popen(
+                [python_exe, "-m", "playwright", "install-deps"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            for line in deps_process.stdout:
+                cleaned = _sanitize_log_line(line)
+                if cleaned:
+                    logger.info("[install-deps] %s", cleaned)
+            deps_process.wait(timeout=120)
+            if deps_process.returncode == 0:
+                logger.info("System dependencies installed successfully")
+            else:
+                logger.warning(
+                    "Could not auto-install system dependencies (return code %d). "
+                    "If the browser fails to launch, run manually: "
+                    "sudo python -m playwright install-deps",
+                    deps_process.returncode,
+                )
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "System dependency installation timed out. "
+                "If the browser fails to launch, run manually: "
+                "sudo python -m playwright install-deps"
+            )
+        except Exception as e:
+            logger.warning(
+                "Could not auto-install system dependencies: %s. "
+                "If the browser fails to launch, run manually: "
+                "sudo python -m playwright install-deps",
+                str(e),
+            )
+
     try:
         logger.info(
             "Checking Playwright Chromium browser — "
