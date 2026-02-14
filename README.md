@@ -32,9 +32,6 @@ All endpoints are under ComfyUI's HTTP server. Prefix with `/api` when using the
 | `/cpe/workflow/convert` | POST | Convert UI format → API format |
 | `/cpe/workflow/get-and-convert?filename=` | GET | Read + convert in one call (recommended) |
 
-<details>
-<summary>Endpoint details</summary>
-
 ### `GET /cpe/health`
 
 Returns headless browser status: `not_installed` | `not_initialized` | `initializing` | `ready` | `error`
@@ -103,8 +100,6 @@ First request ~5–15s (cold start). Subsequent ~1–2s.
 ### `GET /cpe/workflow/get-and-convert`
 
 Same as `/cpe/workflow/convert` but reads the file server-side. Takes `filename` query param. Response includes an additional `filename` field.
-
-</details>
 
 ## How It Works
 
