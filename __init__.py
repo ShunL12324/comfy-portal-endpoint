@@ -65,12 +65,29 @@ def _ensure_playwright_chromium() -> bool:
                 timeout=10,
             )
             if pip_check.returncode != 0:
-                logger.error(
-                    "pip is not available and ensurepip could not install it. "
-                    "On Debian/Ubuntu, try: sudo apt install python3-pip. "
-                    "Then restart ComfyUI."
+                # ensurepip didn't work — fall back to get-pip.py
+                logger.info("ensurepip failed, trying get-pip.py...")
+                import urllib.request
+                import tempfile
+                get_pip_url = "https://bootstrap.pypa.io/get-pip.py"
+                with tempfile.NamedTemporaryFile(suffix=".py", delete=False) as tmp:
+                    tmp_path = tmp.name
+                    urllib.request.urlretrieve(get_pip_url, tmp_path)
+                get_pip_result = subprocess.run(
+                    [python_exe, tmp_path, "--break-system-packages"],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
                 )
-                return False
+                os.unlink(tmp_path)
+                if get_pip_result.returncode != 0:
+                    logger.error(
+                        "Could not install pip automatically. "
+                        "On Debian/Ubuntu, try: sudo apt install python3-pip. "
+                        "Then restart ComfyUI."
+                    )
+                    return False
+                logger.info("pip installed via get-pip.py")
             # Install playwright, stream output so user can see progress
             process = subprocess.Popen(
                 [python_exe, "-m", "pip", "install", "playwright"],
