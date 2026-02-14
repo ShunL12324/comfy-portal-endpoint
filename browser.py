@@ -287,6 +287,8 @@ class HeadlessBrowserManager:
         page = await self._page_pool.get()
         try:
             result = await self._do_convert(page, workflow_data)
+            # Page is healthy — return it to the pool
+            await self._page_pool.put(page)
             return result
         except Exception as first_error:
             logger.warning(
@@ -296,16 +298,33 @@ class HeadlessBrowserManager:
             # Recovery: _do_convert already reloads the page, so just retry
             try:
                 result = await self._do_convert(page, workflow_data)
+                # Recovered — page is healthy again
+                await self._page_pool.put(page)
                 logger.info("Recovery successful, conversion completed on retry")
                 return result
             except Exception as retry_error:
-                self._status = BrowserStatus.ERROR
+                # Page is likely broken — discard it and create a replacement
+                logger.error("Recovery failed, replacing broken page")
+                await self._replace_page(page)
                 self._error_message = f"Conversion failed after retry: {str(retry_error)}"
                 logger.error(self._error_message)
                 raise RuntimeError(self._error_message) from retry_error
-        finally:
-            # Always return the page to the pool
-            await self._page_pool.put(page)
+
+    async def _replace_page(self, broken_page) -> None:
+        """Discard a broken page and create a fresh replacement for the pool."""
+        try:
+            await broken_page.close()
+        except Exception:
+            pass
+
+        try:
+            comfyui_url = self._get_comfyui_url()
+            new_page = await self._create_page(comfyui_url)
+            await self._page_pool.put(new_page)
+            logger.info("Replaced broken page with a fresh one")
+        except Exception as e:
+            logger.error("Failed to create replacement page: %s", str(e))
+            # Pool is now short one page — degrade gracefully
 
     async def _do_convert(self, page, workflow_data: dict) -> dict:
         """Execute the actual conversion in a browser page.

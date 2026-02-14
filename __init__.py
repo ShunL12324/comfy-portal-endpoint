@@ -57,6 +57,20 @@ def _ensure_playwright_chromium() -> bool:
                 text=True,
                 timeout=60,
             )
+            # Verify pip is actually available after ensurepip
+            pip_check = subprocess.run(
+                [python_exe, "-m", "pip", "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if pip_check.returncode != 0:
+                logger.error(
+                    "pip is not available and ensurepip could not install it. "
+                    "On Debian/Ubuntu, try: sudo apt install python3-pip. "
+                    "Then restart ComfyUI."
+                )
+                return False
             # Install playwright, stream output so user can see progress
             process = subprocess.Popen(
                 [python_exe, "-m", "pip", "install", "playwright"],
