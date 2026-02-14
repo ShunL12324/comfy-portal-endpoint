@@ -121,6 +121,9 @@ class HeadlessBrowserManager:
             if self._status == BrowserStatus.READY and self._page_pool is not None:
                 return
 
+            # Clean up any leftover resources from a previous failed state
+            if self._browser is not None:
+                await self._cleanup()
             self._status = BrowserStatus.INITIALIZING
             self._error_message = None
 
@@ -311,7 +314,11 @@ class HeadlessBrowserManager:
                 raise RuntimeError(self._error_message) from retry_error
 
     async def _replace_page(self, broken_page) -> None:
-        """Discard a broken page and create a fresh replacement for the pool."""
+        """Discard a broken page and create a fresh replacement for the pool.
+
+        If replacement fails, puts a sentinel None into the pool to prevent
+        deadlock, then triggers a full re-initialization on next request.
+        """
         try:
             await broken_page.close()
         except Exception:
@@ -324,7 +331,10 @@ class HeadlessBrowserManager:
             logger.info("Replaced broken page with a fresh one")
         except Exception as e:
             logger.error("Failed to create replacement page: %s", str(e))
-            # Pool is now short one page — degrade gracefully
+            # Mark as needing re-initialization so the next request
+            # triggers a full browser restart instead of deadlocking.
+            self._status = BrowserStatus.ERROR
+            self._error_message = "Page pool degraded, will re-initialize on next request"
 
     async def _do_convert(self, page, workflow_data: dict) -> dict:
         """Execute the actual conversion in a browser page.

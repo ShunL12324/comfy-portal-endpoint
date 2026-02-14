@@ -73,21 +73,28 @@ def _ensure_playwright_chromium() -> bool:
                 with tempfile.NamedTemporaryFile(suffix=".py", delete=False) as tmp:
                     tmp_path = tmp.name
                     urllib.request.urlretrieve(get_pip_url, tmp_path)
-                get_pip_result = subprocess.run(
-                    [python_exe, tmp_path, "--break-system-packages"],
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                )
-                os.unlink(tmp_path)
-                if get_pip_result.returncode != 0:
-                    logger.error(
-                        "Could not install pip automatically. "
-                        "On Debian/Ubuntu, try: sudo apt install python3-pip. "
-                        "Then restart ComfyUI."
+                try:
+                    # Only use --break-system-packages outside of venvs
+                    # (PEP 668 externally-managed environments)
+                    get_pip_cmd = [python_exe, tmp_path]
+                    if sys.prefix == sys.base_prefix:
+                        get_pip_cmd.append("--break-system-packages")
+                    get_pip_result = subprocess.run(
+                        get_pip_cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=120,
                     )
-                    return False
-                logger.info("pip installed via get-pip.py")
+                    if get_pip_result.returncode != 0:
+                        logger.error(
+                            "Could not install pip automatically. "
+                            "On Debian/Ubuntu, try: sudo apt install python3-pip. "
+                            "Then restart ComfyUI."
+                        )
+                        return False
+                    logger.info("pip installed via get-pip.py")
+                finally:
+                    os.unlink(tmp_path)
             # Install playwright, stream output so user can see progress
             process = subprocess.Popen(
                 [python_exe, "-m", "pip", "install", "playwright"],
@@ -132,11 +139,13 @@ def _ensure_playwright_chromium() -> bool:
     # On Linux, attempt to install system dependencies (e.g. libnspr4, libnss3)
     # before installing Chromium. Requires root/sudo — if it fails, we log a
     # warning and continue, since the user may already have them installed.
+    # We pipe stdin from /dev/null to prevent sudo from hanging on password prompt.
     if sys.platform.startswith("linux"):
         logger.info("Linux detected — attempting to install Playwright system dependencies...")
         try:
             deps_process = subprocess.Popen(
                 [python_exe, "-m", "playwright", "install-deps"],
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
