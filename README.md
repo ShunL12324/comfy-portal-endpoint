@@ -33,7 +33,55 @@ All endpoints are under ComfyUI's HTTP server. Prefix with `/api` when using the
 | `/cpe/workflow/get-and-convert?filename=` | GET | Read + convert in one call (recommended) |
 
 <details>
-<summary>Convert response example</summary>
+<summary>Endpoint details</summary>
+
+### `GET /cpe/health`
+
+Returns headless browser status: `not_installed` | `not_initialized` | `initializing` | `ready` | `error`
+
+```json
+{ "status": "success", "browser": { "status": "ready" } }
+```
+
+### `GET /cpe/workflow/list`
+
+Lists all `.json` files in `user/default/workflows/`.
+
+```json
+{
+  "status": "success",
+  "workflows": [
+    { "filename": "my_workflow.json", "size": 4096, "modified": 1706000000.0 }
+  ]
+}
+```
+
+### `GET /cpe/workflow/get`
+
+| Param | Required | Description |
+|-------|----------|-------------|
+| `filename` | Yes | Path relative to workflows directory |
+
+```json
+{ "status": "success", "filename": "my_workflow.json", "workflow": "<raw JSON string>" }
+```
+
+### `POST /cpe/workflow/save`
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `workflow` | Yes | Workflow JSON as string |
+| `name` | No | Filename (auto-generated if omitted) |
+
+### `POST /cpe/workflow/convert`
+
+Post the workflow JSON object directly as the request body.
+
+| Status | Meaning |
+|--------|---------|
+| `200` | Success |
+| `400` | Invalid body |
+| `503` | Browser unavailable |
 
 ```json
 {
@@ -49,6 +97,13 @@ All endpoints are under ComfyUI's HTTP server. Prefix with `/api` when using the
   }
 }
 ```
+
+First request ~5–15s (cold start). Subsequent ~1–2s.
+
+### `GET /cpe/workflow/get-and-convert`
+
+Same as `/cpe/workflow/convert` but reads the file server-side. Takes `filename` query param. Response includes an additional `filename` field.
+
 </details>
 
 ## How It Works
