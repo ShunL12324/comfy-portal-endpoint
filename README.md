@@ -129,6 +129,10 @@ First request takes ~5–15s (browser cold start). Subsequent requests ~1–2s.
 | Docker: browser won't launch | Add `RUN playwright install-deps chromium` to Dockerfile |
 | `error` in `/cpe/health` | Auto-recovers on next request. Check logs for details |
 
+## Known Limitations
+
+- Not compatible with [ComfyUI-Login](https://github.com/liusida/ComfyUI-Login) or any extension that blocks/intercepts the ComfyUI frontend from loading. The headless browser needs full access to the frontend to perform workflow conversion. This is expected behavior and we have no plans to address it.
+
 ## Changelog
 
 ### v1.2.0
