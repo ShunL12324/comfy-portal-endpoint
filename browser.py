@@ -349,13 +349,32 @@ class HeadlessBrowserManager:
 
         result = await page.evaluate(
             """async (workflowData) => {
+                window.__cpe_converting = true;
                 try {
+                    // Delegate to the real ComfyUI app's loader so that
+                    // workflow.definitions.subgraphs get registered before
+                    // graphToPrompt walks the graph. A bare `new LGraph()`
+                    // skips subgraph registration, leaving subgraph instance
+                    // nodes with no getInnerNodes() expansion -> empty output.
+                    if (window.__cpe_app && typeof window.__cpe_app.loadGraphData === 'function') {
+                        await window.__cpe_app.loadGraphData(workflowData, true, false, null, {
+                            checkForRerouteMigration: false,
+                            skipAssetScans: true,
+                            silentAssetErrors: true,
+                            deferWarnings: true,
+                        });
+                        const parsed = await window.__cpe_graphToPrompt(window.__cpe_app.graph);
+                        return { success: true, workflow: parsed.output };
+                    }
+                    // Fallback for unexpected environments where app isn't exposed.
                     const graph = new window.LGraph();
                     graph.configure(workflowData, false);
                     const parsed = await window.__cpe_graphToPrompt(graph);
                     return { success: true, workflow: parsed.output };
                 } catch (e) {
-                    return { success: false, error: e.message || String(e) };
+                    return { success: false, error: (e && e.message) || String(e) };
+                } finally {
+                    window.__cpe_converting = false;
                 }
             }""",
             workflow_data,
