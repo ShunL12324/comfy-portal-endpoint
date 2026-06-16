@@ -3,6 +3,12 @@ from server import PromptServer
 import time
 from ..logger import get_logger
 from ..browser import get_browser_manager
+from ..python_converter import (
+    convert as _python_convert,
+    flatten_ui as _flatten_ui,
+    UnsupportedFeature,
+)
+import nodes as _nodes  # ComfyUI core: gives us NODE_CLASS_MAPPINGS for /object_info
 import os
 import glob
 import json
@@ -13,20 +19,63 @@ logger = get_logger()
 server = PromptServer.instance
 
 
+async def _convert_workflow(workflow_data: dict) -> tuple[dict, str]:
+    """Convert UI-format -> API-format.
+
+    Tries the pure-Python converter first. Falls back to the Playwright
+    headless-browser path only when the workflow uses features Python
+    doesn't model (custom serializeValue, legacy group nodes, etc.).
+
+    Returns (api_workflow_dict, converter_name).
+    """
+    try:
+        object_info = _build_object_info()
+        api_workflow = _python_convert(workflow_data, object_info)
+        return api_workflow, "python"
+    except UnsupportedFeature as e:
+        logger.info(
+            "Python converter declined (%s); falling back to headless browser",
+            e,
+        )
+
+    manager = get_browser_manager()
+    api_workflow = await manager.convert_workflow(workflow_data)
+    return api_workflow, "playwright"
+
+
+def _build_object_info() -> dict:
+    """Build the /object_info dict the Python converter needs to discover
+    widget order. Uses ComfyUI's own NODE_CLASS_MAPPINGS so the data matches
+    exactly what the server publishes at /object_info."""
+    out: dict = {}
+    for class_name, cls in (_nodes.NODE_CLASS_MAPPINGS or {}).items():
+        try:
+            input_spec = cls.INPUT_TYPES() if hasattr(cls, "INPUT_TYPES") else {}
+        except Exception:  # noqa: BLE001 -- some custom nodes raise during INPUT_TYPES()
+            continue
+        out[class_name] = {"input": input_spec}
+    return out
+
+
 @server.routes.post("/cpe/workflow/convert")
 async def convert_json(request):
-    """Convert a workflow from UI format to API-executable format using headless browser."""
+    """Convert a workflow from UI format to API-executable format.
+
+    Uses the pure-Python converter for the common case; falls back to the
+    headless-browser path only when the workflow needs frontend JS to
+    serialize correctly.
+    """
     try:
         data = await request.json()
         if not data:
             raise ValueError("Request body is required")
 
-        manager = get_browser_manager()
-        result = await manager.convert_workflow(data)
+        result, converter = await _convert_workflow(data)
 
         return web.json_response({
             "status": "success",
             "message": "Workflow converted successfully",
+            "converter": converter,
             "data": {"workflow": result}
         })
 
@@ -176,6 +225,21 @@ async def get_workflow(request):
         with open(file_path, 'r', encoding='utf-8') as f:
             workflow_content = f.read()
 
+        # ?raw=true returns the file as-is. Default behavior flattens any
+        # subgraph instances inline so clients that don't render the
+        # subgraph node type (e.g. Comfy Portal as of writing) see each
+        # operational inner node as a normal widget card. Idempotent --
+        # workflows without subgraphs pass through unchanged.
+        raw = request.query.get("raw", "").lower() in ("1", "true", "yes")
+        if not raw:
+            try:
+                parsed = json.loads(workflow_content)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict) and (parsed.get("definitions") or {}).get("subgraphs"):
+                flattened = _flatten_ui(parsed)
+                workflow_content = json.dumps(flattened)
+
         return web.json_response({
             "status": "success",
             "filename": filename,
@@ -235,13 +299,12 @@ async def get_and_convert_workflow(request):
         if not workflow_data:
             raise ValueError("Workflow file contains no data or is an empty JSON object")
 
-        # Convert using headless browser
-        manager = get_browser_manager()
-        result = await manager.convert_workflow(workflow_data)
+        result, converter = await _convert_workflow(workflow_data)
 
         return web.json_response({
             "status": "success",
             "message": "Workflow converted successfully",
+            "converter": converter,
             "filename": filename,
             "data": {"workflow": result}
         })
