@@ -135,6 +135,10 @@ First request takes ~5–15s (browser cold start). Subsequent requests ~1–2s.
 
 ## Changelog
 
+### Unreleased
+- Use ComfyUI native `app.loadGraphData` + `app.graphToPrompt` for workflow conversion so subgraph workflows expand correctly (fixes `class_type: null` / UNKNOWN_NODE in Comfy Portal)
+- Keep legacy `__cpe_graphToPrompt` fallback for older ComfyUI frontends
+
 ### v1.2.0
 - Page pool for concurrent conversions (default 2 pages)
 - Auto-install system deps on Linux (`playwright install-deps`)

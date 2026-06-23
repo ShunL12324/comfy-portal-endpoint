@@ -25,7 +25,9 @@ class HeadlessBrowserManager:
     """Manages a headless Chromium browser with a page pool for workflow conversion.
 
     Uses Playwright to load the ComfyUI frontend in a headless browser,
-    then calls the graphToPrompt JS function via page.evaluate().
+    then converts workflows via page.evaluate(). Prefers ComfyUI's native
+    app.loadGraphData + app.graphToPrompt (required for subgraph workflows),
+    falling back to the bundled __cpe_graphToPrompt helper on older frontends.
     A pool of pages allows concurrent conversions without blocking.
     """
 
@@ -79,10 +81,16 @@ class HeadlessBrowserManager:
             timeout=30000,
         )
 
-        # Wait for our plugin JS to expose __cpe_graphToPrompt
+        # Native ComfyUI conversion handles subgraphs; legacy fallback uses __cpe_graphToPrompt
         await page.wait_for_function(
-            "() => typeof window.__cpe_graphToPrompt !== 'undefined'",
-            timeout=30000,
+            """() => {
+                const hasNative = typeof window.app !== 'undefined'
+                    && typeof window.app.loadGraphData === 'function'
+                    && typeof window.app.graphToPrompt === 'function';
+                const hasLegacy = typeof window.__cpe_graphToPrompt !== 'undefined';
+                return hasNative || hasLegacy;
+            }""",
+            timeout=60000,
         )
 
         # Wait for ComfyUI node types to be registered
@@ -350,6 +358,12 @@ class HeadlessBrowserManager:
         result = await page.evaluate(
             """async (workflowData) => {
                 try {
+                    if (window.app?.loadGraphData && window.app?.graphToPrompt) {
+                        await window.app.loadGraphData(workflowData);
+                        const parsed = await window.app.graphToPrompt();
+                        return { success: true, workflow: parsed.output };
+                    }
+
                     const graph = new window.LGraph();
                     graph.configure(workflowData, false);
                     const parsed = await window.__cpe_graphToPrompt(graph);
