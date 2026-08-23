@@ -41,6 +41,7 @@ class HeadlessBrowserManager:
         self._page_pool: asyncio.Queue = None
         self._pool_size = pool_size
         self._init_lock: Optional[asyncio.Lock] = None
+        self._warned_legacy_fallback = False
 
         # Register synchronous cleanup at process exit
         atexit.register(self._sync_cleanup)
@@ -81,17 +82,35 @@ class HeadlessBrowserManager:
             timeout=30000,
         )
 
-        # Native ComfyUI conversion handles subgraphs; legacy fallback uses __cpe_graphToPrompt
-        await page.wait_for_function(
-            """() => {
-                const hasNative = typeof window.app !== 'undefined'
-                    && typeof window.app.loadGraphData === 'function'
-                    && typeof window.app.graphToPrompt === 'function';
-                const hasLegacy = typeof window.__cpe_graphToPrompt !== 'undefined';
-                return hasNative || hasLegacy;
-            }""",
-            timeout=60000,
-        )
+        # Wait for ComfyUI's native conversion API specifically — not "native or
+        # legacy". `window.__cpe_graphToPrompt` is set when our extension module
+        # evaluates, which is ~8s before ComfyUI finishes its async setup and
+        # assigns `window.app`. An either/or gate therefore always resolved on the
+        # legacy helper, and _do_convert then found `window.app` still undefined
+        # and took the fallback branch — every single time. Subgraph containers
+        # came out as `class_type: null` and virtual nodes (Note, Reroute) were
+        # never dropped, which is exactly what the native path exists to avoid.
+        from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+        try:
+            await page.wait_for_function(
+                """() => typeof window.app?.loadGraphData === 'function'
+                       && typeof window.app?.graphToPrompt === 'function'""",
+                timeout=60000,
+            )
+        except PlaywrightTimeoutError:
+            # Frontend genuinely predates the native API. Fall back, but say so —
+            # silent fallback is what made this bug expensive to find.
+            if not self._warned_legacy_fallback:
+                self._warned_legacy_fallback = True
+                logger.warning(
+                    "ComfyUI native conversion API unavailable; using the legacy "
+                    "helper. Subgraph workflows will not convert correctly."
+                )
+            await page.wait_for_function(
+                "() => typeof window.__cpe_graphToPrompt === 'function'",
+                timeout=30000,
+            )
 
         # Wait for ComfyUI node types to be registered
         await page.wait_for_function(
@@ -306,9 +325,9 @@ class HeadlessBrowserManager:
                 "Workflow conversion failed, attempting recovery: %s",
                 str(first_error),
             )
-            # Recovery: _do_convert already reloads the page, so just retry
+            # Recovery: reload to reset a page that may be wedged, then retry.
             try:
-                result = await self._do_convert(page, workflow_data)
+                result = await self._do_convert(page, workflow_data, reload=True)
                 # Recovered — page is healthy again
                 await self._page_pool.put(page)
                 logger.info("Recovery successful, conversion completed on retry")
@@ -344,30 +363,53 @@ class HeadlessBrowserManager:
             self._status = BrowserStatus.ERROR
             self._error_message = "Page pool degraded, will re-initialize on next request"
 
-    async def _do_convert(self, page, workflow_data: dict) -> dict:
+    async def _do_convert(self, page, workflow_data: dict, reload: bool = False) -> dict:
         """Execute the actual conversion in a browser page.
 
-        Reloads the page before each conversion to ensure a clean frontend state,
-        since ComfyUI extensions modify LiteGraph globals that persist across
-        graph instances.
+        Does NOT reload by default. `app.loadGraphData` fully replaces the active
+        graph, so reloading is unnecessary — and it is actively harmful: the
+        frontend persists the open workflow and restores it during startup, and
+        that restore is async. Reloading raced our load and could finish after
+        it, so `graphToPrompt` returned the *previous* conversion's workflow.
+        Every workflow then converted to whatever was converted before it.
+
+        Reloading is reserved for the retry path, where the page may be wedged
+        and a reset is worth the risk.
         """
-        # Reload the page to reset frontend state before conversion
-        await page.reload(wait_until="domcontentloaded", timeout=30000)
+        if reload:
+            await page.reload(wait_until="domcontentloaded", timeout=30000)
         await self._wait_for_comfyui_ready(page)
 
         result = await page.evaluate(
             """async (workflowData) => {
                 try {
+                    let output;
                     if (window.app?.loadGraphData && window.app?.graphToPrompt) {
                         await window.app.loadGraphData(workflowData);
-                        const parsed = await window.app.graphToPrompt();
-                        return { success: true, workflow: parsed.output };
+                        output = (await window.app.graphToPrompt()).output;
+                    } else {
+                        const graph = new window.LGraph();
+                        graph.configure(workflowData, false);
+                        output = (await window.__cpe_graphToPrompt(graph)).output;
                     }
 
-                    const graph = new window.LGraph();
-                    graph.configure(workflowData, false);
-                    const parsed = await window.__cpe_graphToPrompt(graph);
-                    return { success: true, workflow: parsed.output };
+                    // The failure this guards against returned a *different*
+                    // workflow rather than an error, which the caller has no way
+                    // to notice. Every emitted node must trace back to a node in
+                    // the input ('114:77' is subgraph node 77 inside node 114).
+                    const known = new Set((workflowData.nodes || []).map(n => String(n.id)));
+                    const foreign = Object.keys(output).filter(
+                        id => !known.has(String(id).split(':')[0])
+                    );
+                    if (foreign.length) {
+                        return {
+                            success: false,
+                            error: 'Converted graph does not match the requested workflow'
+                                 + ' (unexpected nodes: ' + foreign.slice(0, 5).join(', ') + ')',
+                        };
+                    }
+
+                    return { success: true, workflow: output };
                 } catch (e) {
                     return { success: false, error: e.message || String(e) };
                 }
