@@ -135,7 +135,7 @@ First request takes ~5–15s (browser cold start). Subsequent requests ~1–2s.
 
 ## Changelog
 
-### Unreleased
+### v1.2.1
 - Use ComfyUI native `app.loadGraphData` + `app.graphToPrompt` for workflow conversion so subgraph workflows expand correctly (fixes `class_type: null` / UNKNOWN_NODE in Comfy Portal)
 - Keep legacy `__cpe_graphToPrompt` fallback for older ComfyUI frontends
 - Wait for the native API specifically before converting. The previous readiness check accepted *either* the native API or the legacy helper, and the legacy helper is available ~8s earlier — so the native path above never actually ran, and virtual nodes (`Note`, `Reroute`) were emitted instead of dropped. Falling back to the legacy helper now logs a warning instead of happening silently
