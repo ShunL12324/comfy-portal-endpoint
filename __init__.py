@@ -4,6 +4,7 @@ import re
 import subprocess
 from .logger import get_logger
 from .api import workflow
+from .api import system
 
 logger = get_logger()
 
